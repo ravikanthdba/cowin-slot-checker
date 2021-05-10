@@ -236,24 +236,30 @@ func (c *CowinClient) GetHospitals(request *http.Request, districtID, date strin
 	if err != nil {
 		log.Println("ERROR: ", err)
 	}
+
+	if len(cowinResponse.Centers) > 0 {
 	for _, value := range cowinResponse.Centers {
-		for _, session := range value.Sessions {
-			if int(session.AvailableCapacity) > 0 {
-				var h Hospitals
-				h.Name = value.Name
-				h.StateName = value.StateName
-				h.DistrictName = value.DistrictName
-				h.BlockName = value.BlockName
-				h.Pincode = value.Pincode
-				h.Lat = value.Lat
-				h.Long = value.Long
-				h.Date = session.Date
-				h.AvailableCapacity = float64(session.AvailableCapacity)
-				h.MinAgeLimit = int(session.MinAgeLimit)
-				h.Vaccine = session.Vaccine
-				hospitals = append(hospitals, h)
+			for _, session := range value.Sessions {
+				if int(session.AvailableCapacity) > 0 {
+					var h Hospitals
+					h.Name = value.Name
+					h.StateName = value.StateName
+					h.DistrictName = value.DistrictName
+					h.BlockName = value.BlockName
+					h.Pincode = value.Pincode
+					h.Lat = value.Lat
+					h.Long = value.Long
+					h.Date = session.Date
+					h.AvailableCapacity = float64(session.AvailableCapacity)
+					h.MinAgeLimit = int(session.MinAgeLimit)
+					h.Vaccine = session.Vaccine
+					hospitals = append(hospitals, h)
+				}
 			}
 		}
+	} else {
+		fmt.Errorf("ERROR: No records in cowinResponse.Centers")
+		return nil
 	}
 
 	return hospitals

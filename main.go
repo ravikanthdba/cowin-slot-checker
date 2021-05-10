@@ -5,9 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	scheduler "scheduler"
-
 	"github.com/robfig/cron"
+	scheduler "github.com/cowin-slot-checker/src/scheduler"
 )
 
 func Hello(w http.ResponseWriter, r *http.Request) {
@@ -21,6 +20,7 @@ func main() {
 		scheduler.RefreshDistrictsTask()
 		scheduler.RefreshHospitalsTask()
 		scheduler.DatabaseRefreshTask()
+		scheduler.CacheRefreshTask()
 	}()
 
 	schedule := cron.New()
@@ -29,40 +29,10 @@ func main() {
 	schedule.AddFunc("@every 360h", scheduler.RefreshDistrictsTask)
 	schedule.AddFunc("@every 20m", scheduler.RefreshHospitalsTask)
 	schedule.AddFunc("@every 30m", scheduler.DatabaseRefreshTask)
+	schedule.AddFunc("@every 40m", scheduler.CacheRefreshTask)
 	log.Println("Scheduling Completed")
 	schedule.Start()
 
-	// bot, err := tgbotapi.NewBotAPI("1723271445:AAFSMcBwLq70nomEAWgYTj_D6ItqsCGaWz4")
-	// if err != nil {
-	// 	log.Panic(err)
-	// }
-
-	// bot.Debug = true
-
-	// log.Printf("Authorized on account %s", bot.Self.FirstName)
-
-	// u := tgbotapi.NewUpdate(0)
-	// u.Timeout = 60
-
-	// updates, err := bot.GetUpdatesChan(u)
-
-	// for update := range updates {
-	// 	if update.Message == nil { // ignore any non-Message Updates
-	// 		continue
-	// 	}
-
-	// 	log.Printf("[%s]:  %s", update.Message.From, update.Message.Text)
-	// 	var message tgbotapi.MessageConfig
-	// 	if update.Message.Text == "why" {
-	// 		message = tgbotapi.NewMessage(update.Message.Chat.ID, "This is covin app tracker")
-	// 	} else {
-	// 		message = tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text+update.Message.From.String())
-	// 	}
-
-	// 	message.ReplyToMessageID = update.Message.MessageID
-	// 	log.Println("====")
-	// 	bot.Send(message)
-	// }
 	http.HandleFunc("/status", Hello)
 	http.ListenAndServe(":8080", nil)
 }

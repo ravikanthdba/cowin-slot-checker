@@ -3,17 +3,19 @@ package scheduler
 import (
 	"context"
 	"log"
-	model "model"
 	"net/http"
 	"net/url"
 	"strconv"
 	"sync"
 	"time"
-
+	"flag"
+	"fmt"
 	"github.com/gammazero/workerpool"
 	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mysql"
-	bulk "github.com/t-tiger/gorm-bulk-insert"
+	rejson "github.com/nitishm/go-rejson/v4"
+	goredis "github.com/go-redis/redis/v8"
+	model "github.com/cowin-slot-checker/src/model"
+	database "github.com/cowin-slot-checker/src/database"
 )
 
 func GetStateCodes(conn *model.CowinClient) []string {
@@ -109,9 +111,7 @@ func RefreshDistrictsTask() {
 
 func worker(conn *model.CowinClient, request *http.Request, id, date string) []model.Hospitals {
 	var hospitalResponse []model.Hospitals
-	log.Println("worker for district id: ", id, " started")
 	hospitalResponse = conn.GetHospitals(request, id, date)
-	log.Println("worker for district id: ", id, " finished")
 	return hospitalResponse
 }
 
@@ -170,24 +170,127 @@ func (h HospitalDistrictMapping) convertToInterfaces() []interface{} {
 	return data
 }
 
+var refreshDatabase bool
+
+func dateToQuery(conn *gorm.DB, table string, timeToLookback time.Duration) string {
+	var minback, maxday string
+	maxDate, _ := conn.Table("hospitals").Select("max(created_at) as date").Rows()
+	for maxDate.Next() {
+		if err := maxDate.Scan(&maxday); err != nil {
+			log.Fatal(err)
+		}
+		modtime, err := time.Parse("2006-01-02 15:04:05", maxday)
+		if err != nil {
+			log.Fatal(err)
+		}
+		minback = modtime.Add(timeToLookback * time.Minute).Format("2006-01-02 15:04:05")
+	}
+	return minback
+}
+
 func DatabaseRefreshTask() {
 	if refreshHospitals {
+		refreshDatabase = false
 		start := time.Now()
-		db, err := gorm.Open("mysql", "cowin:GenieHello123*@tcp(172.23.227.40:3306)/cowin_database")
+		log.Println("Database Connection Established for database Refresh")
+		db, err := database.Connection("cowin", "HappyVaccination123*", "localhost", "cowin_database")
 		if err != nil {
-			log.Println("ERROR: Connecting to database: ", err)
+			log.Println(err)
 		}
-		log.Println("Connection Established")
-		defer db.Close()
-		db.AutoMigrate(&model.Hospitals{})
+		defer db.Connection.Close()
+		db.Connection.AutoMigrate(&model.Hospitals{})
 		data := hdata.convertToInterfaces()
-		bulk.BulkInsert(db, data, 300)
+		_, err = db.Load(data, 300)
+		if err != nil {
+			log.Println("ERROR: bulk load has failed: ", err)
+			return
+		}
 		log.Println("Insert into the database has been completed")
-		deleteTime := time.Now().Add(-40 * time.Minute).Format("2006-01-02 15:04:05")
-		log.Println("Soft Deleting all data before ", deleteTime)
-		db.Unscoped().Where("created_at > ?", deleteTime).Delete(&model.Hospitals{})
-		log.Println("Delete Completed")
-		db.Commit()
+
+
+
+		deletiondate := dateToQuery(db.Connection, "hospital", -30)
+		log.Println("Hard Deleting all data before ", deletiondate)
+		var hospitals model.Hospitals
+		tx := db.Connection.Begin()
+		results := db.Connection.Where("created_at < ?", deletiondate).Delete(&hospitals)
+		tx.Commit()
+		if results.Error != nil {
+			log.Println("ERROR: ", results.Error)
+			return
+		}
+		log.Println("Deleted " + strconv.Itoa(int(results.RowsAffected)) + " Records.")
 		log.Println("Database Transaction completed in: ", time.Now().Sub(start))
 	}
+	refreshDatabase = true
+}
+
+type Result struct {
+	Name string
+	BlockName string
+	Date string
+	AvailableCapacity float64
+	MinAgeLimit float64
+	Vaccine string
+}
+
+type Results struct {
+	DistrictName string
+	Result Result
+}
+
+func UpdateCache(rh *rejson.Handler, finalResult []Results) {
+	res, err := rh.JSONSet("cowinResult", ".", finalResult)
+	if err != nil {
+		log.Fatalf("Failed to JSONSet")
+		return
+	}
+
+	if res.(string) == "OK" {
+		fmt.Printf("Success: %s\n", res)
+	} else {
+		fmt.Println("Failed to Set: ")
+	}
+}
+
+func CacheRefreshTask() {
+		if refreshDatabase {
+			log.Println("Launching Cache Refresh Task")
+			db, err := database.Connection("cowin", "HappyVaccination123*", "localhost", "cowin_database")
+			if err != nil {
+				log.Println(err)
+			}
+			defer db.Connection.Close()
+			querydate := dateToQuery(db.Connection, "hospital", -10)
+			log.Println("Querying database for fetching data")
+			var finalResult []Results
+			tx := db.Connection.Begin()
+			records, _ := tx.Table("hospitals").Select("name, district_name, block_name, date, available_capacity, min_age_limit, vaccine").Where("created_at > ?", querydate).Rows()
+			for records.Next() {
+				var name, districtName, blockName, date, vaccine string
+				var availableCapacity, minAgeLimit float64
+				if err := records.Scan(&name, &districtName, &blockName, &date, &availableCapacity, &minAgeLimit, &vaccine); err != nil {
+					log.Println("ERROR: ", err)
+				}
+				var results Results
+				
+				results.DistrictName = districtName
+				results.Result.Name = name
+				results.Result.BlockName = blockName
+				results.Result.Date = date
+				results.Result.AvailableCapacity = availableCapacity
+				results.Result.MinAgeLimit = minAgeLimit
+				results.Result.Vaccine = vaccine
+				finalResult = append(finalResult, results)
+			}
+			tx.Commit()
+			log.Println("Fetching Records Completed")
+			log.Println("Setting Cache in Redis")
+			var addr = flag.String("Server", "localhost:6379", "Redis server address")
+			rh := rejson.NewReJSONHandler()
+			flag.Parse()
+			cli := goredis.NewClient(&goredis.Options{Addr: *addr})
+			rh.SetGoRedisClient(cli)
+			UpdateCache(rh, finalResult)
+		}
 }
