@@ -173,7 +173,7 @@ func DatabaseRefreshTask() {
 		log.Println("Refreshing Database Data")
 		start := time.Now()
 		refreshDatabase = false
-		db, err := database.CreateConnection("cowin_user", "GenieHello^123", "172.23.227.40", "cowin_database")
+		db, err := database.CreateConnection("cowin_user", "HappyVaccination123$", "localhost", "cowin_database")
 		if err != nil {
 			fmt.Errorf("ERROR: ", err)
 		}
@@ -253,7 +253,7 @@ func CacheRefreshTask() {
 	if refreshDatabase {
 		log.Println("Launching Cache Refresh Task")
 		start := time.Now()
-		db, err := database.CreateConnection("cowin_user", "GenieHello^123", "172.23.227.40", "cowin_database")
+		db, err := database.CreateConnection("cowin_user", "HappyVaccination123$", "localhost", "cowin_database")
 		if err != nil {
 			log.Println(err)
 		}
