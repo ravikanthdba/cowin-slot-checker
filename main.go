@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/robfig/cron"
 	scheduler "github.com/cowin-slot-checker/src/scheduler"
+	"github.com/robfig/cron"
 )
 
 func Hello(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +29,7 @@ func main() {
 	schedule.AddFunc("@every 360h", scheduler.RefreshDistrictsTask)
 	schedule.AddFunc("@every 20m", scheduler.RefreshHospitalsTask)
 	schedule.AddFunc("@every 30m", scheduler.DatabaseRefreshTask)
-	schedule.AddFunc("@every 40m", scheduler.CacheRefreshTask)
+	schedule.AddFunc("@every 5m", scheduler.CacheRefreshTask)
 	log.Println("Scheduling Completed")
 	schedule.Start()
 

@@ -3,21 +3,22 @@ package database
 import (
 	"fmt"
 	"log"
-	"strconv"
-	"github.com/jinzhu/gorm"
+	"time"
+
 	_ "github.com/jinzhu/gorm/dialects/mysql"
+
+	"github.com/jinzhu/gorm"
 	bulk "github.com/t-tiger/gorm-bulk-insert"
-	// model "github.com/cowin-slot-checker/src/model"
 )
 
 type DatabaseConnection struct {
 	Connection *gorm.DB
 }
 
-func Connection(username, password, hostname, database string) (*DatabaseConnection, error) {
-	db, err := gorm.Open("mysql", username + ":" + password + "@tcp(" + hostname + ":3306)/" + database)
+func CreateConnection(username, password, hostname, database string) (*DatabaseConnection, error) {
+	db, err := gorm.Open("mysql", username+":"+password+"@tcp("+hostname+":3306)/"+database)
 	if err != nil {
-		return nil, fmt.Errorf("ERROR: Connecting to database: ", err)
+		return nil, fmt.Errorf("ERROR: Connecting to database: %q", err)
 	}
 	var conn DatabaseConnection
 	conn.Connection = db
@@ -26,46 +27,52 @@ func Connection(username, password, hostname, database string) (*DatabaseConnect
 
 func (d *DatabaseConnection) Load(data []interface{}, loadValue int) (bool, error) {
 	tx := d.Connection.Begin()
-	err := bulk.BulkInsert(d.Connection, data, loadValue)
+	start := time.Now()
+	err := bulk.BulkInsert(tx, data, loadValue)
 	if err != nil {
-		return false, fmt.Errorf("Error in Bulk Loading: ", err)
+		return false, fmt.Errorf("ERROR: Error in Bulk Loading: %q", err)
 	}
 	tx.Commit()
+	log.Println("Bulk Load completed in: ", time.Since(start))
 	return true, nil
 }
 
-func (d *DatabaseConnection) DeleteRecords(model interface{}) (bool, error) {
-	db := d.Connection.Unscoped().Delete(&model)
-	if db.Error != nil {
-		return false, fmt.Errorf("ERROR: Delete failed: ", db.Error)
-	}
-	log.Println(strconv.Itoa(int(db.RowsAffected)) + " records deleted from the database")
-	return true, nil
-}
-
-type Hospitals struct {
-	Name              string
-	StateName         string
-	DistrictName      string
-	BlockName         string
-	Pincode           int
-	Lat               int
-	Long              int
-	Date              string
-	AvailableCapacity float64
-	MinAgeLimit       int
-	Vaccine           string
-}
-
-func (d *DatabaseConnection) SelectRecords(condition string, model interface{}, conditionValue ...interface{}) (interface{}, error) {
+func (d *DatabaseConnection) DatabaseQueryWithoutCondition(query string) (*gorm.DB, error) {
 	tx := d.Connection.Begin()
-	hospitals := model.(Hospitals)
-	results := d.Connection.Where("name = ?", conditionValue...).Find(&hospitals)
-	if tx.Error != nil {
-		return nil, fmt.Errorf("ERROR: Query failed: ", tx.Error)
+	start := time.Now()
+	results := d.Connection.Raw(query)
+	tx.Commit()
+	log.Println("Select Query completed in: ", time.Since(start))
+	return results, nil
+}
+
+func (d *DatabaseConnection) DatabaseQueryWithCondition(query string, model interface{}, condition ...interface{}) (*gorm.DB, error) {
+	tx := d.Connection.Begin()
+	start := time.Now()
+	results := d.Connection.Raw(query, condition...).Scan(model)
+	tx.Commit()
+	log.Println("Select Query with condition completed in: ", time.Since(start))
+	return results, nil
+}
+
+func (d *DatabaseConnection) DeleteRecords(query string, model interface{}, condition ...interface{}) (*gorm.DB, error) {
+	tx := d.Connection.Begin()
+	start := time.Now()
+	results := d.Connection.Where(query, condition...).Delete(model)
+	tx.Commit()
+	log.Println("Delete Query with condition for delete completed in: ", time.Since(start))
+	return results, nil
+}
+
+func (d *DatabaseConnection) AutoMigrateTables(table ...interface{}) (bool, error) {
+	tx := d.Connection.Begin()
+	start := time.Now()
+	result := tx.AutoMigrate(table...)
+	if result.Error != nil {
+		return false, result.Error
 	}
 	tx.Commit()
-	log.Println(results.RowsAffected)
-	log.Println(results.Error)
-	return results, nil
+	log.Println("Tables have been created")
+	log.Println("Tables creation completed in: ", time.Since(start))
+	return true, nil
 }

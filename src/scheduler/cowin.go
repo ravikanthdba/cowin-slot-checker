@@ -2,122 +2,93 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
-	"flag"
-	"fmt"
+
 	"github.com/gammazero/workerpool"
-	"github.com/jinzhu/gorm"
-	rejson "github.com/nitishm/go-rejson/v4"
-	goredis "github.com/go-redis/redis/v8"
-	model "github.com/cowin-slot-checker/src/model"
+
+	cache "github.com/cowin-slot-checker/src/cache"
 	database "github.com/cowin-slot-checker/src/database"
+	model "github.com/cowin-slot-checker/src/model"
 )
 
-func GetStateCodes(conn *model.CowinClient) []string {
-	urlValue, err := url.ParseRequestURI("https://cdn-api.co-vin.in/api/v2/admin/location/states")
-	if err != nil {
-		log.Println("ERROR:", err)
-	}
-	request, err := conn.NewRequest(context.Background(), http.MethodGet, urlValue, nil)
-	if err != nil {
-		log.Println("Error: ", err)
-	}
-
-	response := conn.GetStates(request)
-
-	var stateID []string
-	for _, value := range response {
-		stateID = append(stateID, strconv.Itoa(value.StateID))
-	}
-
-	return stateID
-}
-
-var stateCodes []string
 var refreshStatesTask bool
+var stateCodes []string
 
 func RefreshStatesTask() {
 	start := time.Now()
 	refreshStatesTask = false
+	log.Println("Refreshing States data")
 	client, err := model.NewClient(nil)
 	if err != nil {
-		log.Println(err)
+		fmt.Errorf("ERROR: %q", err)
 	}
-	log.Println("Refreshing States data")
-	stateCodes = GetStateCodes(client)
+	urlvalue, err := getParsedURL("https://cdn-api.co-vin.in/api/v2/admin/location/states")
+	if err != nil {
+		fmt.Errorf("ERROR: ", err)
+	}
+	req, err := client.NewRequest(context.Background(), http.MethodGet, urlvalue, nil)
+	if err != nil {
+		fmt.Errorf("ERROR: ", err)
+	}
+	states, err := client.GetStates(req)
+	if err != nil {
+		fmt.Errorf("ERROR:", err)
+	}
+	if stateCodes, err = getStateCodes(states); err != nil {
+		fmt.Errorf("ERROR:", err)
+	}
 	log.Println("Refresh of states completed")
 	log.Println("Function to refresh states sleeping for 1 month")
-	log.Println("Refresh States completed in: ", time.Now().Sub(start))
+	log.Println("Refresh States completed in: ", time.Since(start))
 	refreshStatesTask = true
 }
 
-func GetDistrictCodes(conn *model.CowinClient, stateID string, urlValue *url.URL) []model.Districts {
-	request, err := conn.NewRequest(context.Background(), http.MethodGet, urlValue, nil)
-	if err != nil {
-		log.Println("Error:", err)
-	}
-
-	response := conn.GetDistricts(request, stateID)
-	return response
-}
-
-type Mapping struct {
-	mu sync.Mutex
-	d  []string
-}
-
-var c Mapping
-var refreshDistrictTask bool
+var mu sync.Mutex
+var refreshDistricts bool
+var districtcodes []string
 
 func RefreshDistrictsTask() {
 	if refreshStatesTask {
-		refreshDistrictTask = false
+		log.Println("Refreshing Districts Data")
+		refreshDistricts = false
+		start := time.Now()
 		client, err := model.NewClient(nil)
 		if err != nil {
-			log.Println(err)
+			log.Println("ERROR: ", err)
 		}
-
-		start := time.Now()
-		log.Println("Refreshing Districts data")
-		done := make(chan bool, len(stateCodes))
+		wp := workerpool.New(5)
 		for _, code := range stateCodes {
-			go func(code string) {
-				log.Println("Launching query for district code: ", code)
-				urlValue, _ := url.ParseRequestURI("https://cdn-api.co-vin.in/api/v2/admin/location/districts/" + code)
-				districts := GetDistrictCodes(client, code, urlValue)
-				for _, code := range districts {
-					c.mu.Lock()
-					c.d = append(c.d, strconv.Itoa(code.DistrictID))
-					c.mu.Unlock()
+			urlValue, err := getParsedURL("https://cdn-api.co-vin.in/api/v2/admin/location/districts/" + code)
+			if err != nil {
+				fmt.Errorf("ERROR: ", err)
+			}
+			req, err := client.NewRequest(context.Background(), http.MethodGet, urlValue, nil)
+			if err != nil {
+				fmt.Errorf("ERROR: ", err)
+			}
+			wp.Submit(func() {
+				districts := client.GetDistricts(req, code)
+				for _, district := range districts {
+					mu.Lock()
+					districtcodes = append(districtcodes, strconv.Itoa(district.DistrictID))
+					mu.Unlock()
 				}
-				done <- true
-			}(code)
+			})
 		}
-
-		for i := 1; i <= len(stateCodes); i++ {
-			<-done
-		}
-		log.Println("Refresh of districts completed")
-		log.Println("Function to refresh districts sleeping for 15 days")
-		log.Println("Refresh Districts completed in: ", time.Now().Sub(start))
-		refreshDistrictTask = true
+		wp.StopWait()
+		log.Println("Code completed in: ", time.Since(start))
+		refreshDistricts = true
+		log.Println("Refreshing Districts Data Completed")
 	}
 }
 
-func worker(conn *model.CowinClient, request *http.Request, id, date string) []model.Hospitals {
-	var hospitalResponse []model.Hospitals
-	hospitalResponse = conn.GetHospitals(request, id, date)
-	return hospitalResponse
-}
-
 type HospitalDistrictMapping struct {
-	mu        sync.Mutex
-	hospitals [][]model.Hospitals
+	hospitalsList [][]model.Hospitals
 }
 
 var hdata HospitalDistrictMapping
@@ -125,172 +96,201 @@ var refreshHospitals bool
 
 func RefreshHospitalsTask() {
 	refreshHospitals = false
-	if refreshStatesTask {
+	if refreshDistricts {
+		start := time.Now()
 		log.Println("Refreshing Hospitals Data")
 		client, err := model.NewClient(nil)
 		if err != nil {
 			log.Println(err)
 		}
 		wp := workerpool.New(5)
-		requests := c.d
-		start := time.Now()
-		for _, r := range requests {
-			r := r
+		date := start.Format("02-01-2006")
+		for _, district := range districtcodes {
+			urlValue, err := getParsedURL("https://cdn-api.co-vin.in/api/v2/appointment/sessions/public/calendarByDistrict?date=" + date + "&" + "district_id=" + district)
+			if err != nil {
+				log.Println("ERROR: ", err)
+			}
+			request, err := client.NewRequest(context.Background(), http.MethodGet, urlValue, nil)
+			if err != nil {
+				log.Println("ERROR: ", err)
+			}
 			wp.Submit(func() {
-				date := time.Now().Format("02-01-2006")
-				urlValue, _ := url.ParseRequestURI("https://cdn-api.co-vin.in/api/v2/appointment/sessions/public/calendarByDistrict?date=" + date + "&" + "district_id=" + r)
-				request, err := client.NewRequest(context.Background(), http.MethodGet, urlValue, nil)
-				if err != nil {
-					log.Println("ERROR: ", err)
+				hospitalResponse := client.GetHospitals(request, district, date)
+				mu.Lock()
+				if len(hospitalResponse) > 0 {
+					hdata.hospitalsList = append(hdata.hospitalsList, hospitalResponse)
 				}
-				hresponse := worker(client, request, r, date)
-				hdata.mu.Lock()
-				if len(hresponse) > 0 {
-					hdata.hospitals = append(hdata.hospitals, hresponse)
-				}
-				hdata.mu.Unlock()
+				mu.Unlock()
 			})
 		}
-
 		wp.StopWait()
 		log.Println("Refresh of Hospitals completed")
 		log.Println("Function to refresh hospitals sleeping for 30 minutes")
-		log.Println("Code completed in: ", time.Now().Sub(start))
+		log.Println("Code completed in: ", time.Since(start))
 	}
 	refreshHospitals = true
 }
 
-func (h HospitalDistrictMapping) convertToInterfaces() []interface{} {
-	var data []interface{}
-	for _, value := range h.hospitals {
-		for _, hospital := range value {
-			data = append(data, hospital)
-		}
-	}
-	return data
-}
-
 var refreshDatabase bool
-
-func dateToQuery(conn *gorm.DB, table string, timeToLookback time.Duration) string {
-	var minback, maxday string
-	maxDate, _ := conn.Table("hospitals").Select("max(created_at) as date").Rows()
-	for maxDate.Next() {
-		if err := maxDate.Scan(&maxday); err != nil {
-			log.Fatal(err)
-		}
-		modtime, err := time.Parse("2006-01-02 15:04:05", maxday)
-		if err != nil {
-			log.Fatal(err)
-		}
-		minback = modtime.Add(timeToLookback * time.Minute).Format("2006-01-02 15:04:05")
-	}
-	return minback
-}
 
 func DatabaseRefreshTask() {
 	if refreshHospitals {
-		refreshDatabase = false
+		log.Println("Refreshing Database Data")
 		start := time.Now()
-		log.Println("Database Connection Established for database Refresh")
-		db, err := database.Connection("cowin", "HappyVaccination123*", "localhost", "cowin_database")
+		refreshDatabase = false
+		db, err := database.CreateConnection("cowin_user", "GenieHello^123", "172.23.227.40", "cowin_database")
+		if err != nil {
+			fmt.Errorf("ERROR: ", err)
+		}
+		defer db.Connection.Close()
+		log.Println("Creating Tables if not exists")
+		autoMigrateResults, err := db.AutoMigrateTables(model.Hospitals{})
+		if !autoMigrateResults {
+			fmt.Errorf("%q", err)
+		}
+
+		log.Println("Bulk loading data into the table")
+		interfaceData := hdata.convertToInterfaces()
+		_, err = db.Load(interfaceData, 500)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		results, err := db.DatabaseQueryWithoutCondition("select max(created_at) from hospitals")
+		if err != nil {
+			fmt.Errorf("ERROR: Error Querying database: %q", err)
+		}
+		var date string
+		createdAt, err := results.Rows()
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+		for createdAt.Next() {
+			if err := createdAt.Scan(&date); err != nil {
+				fmt.Errorf("%q", err)
+			}
+		}
+		log.Println("Records before ", dateToQuery(date, -20), " will be deleted")
+
+		_, err = db.DeleteRecords("created_at < ?", &model.Hospitals{}, dateToQuery(date, -20))
+		if err != nil {
+			fmt.Errorf("ERROR: Error Querying database: %q", err)
+		}
+
+		var recordCount []int
+		countRecords, err := db.DatabaseQueryWithCondition("select count(*) from hospitals where deleted_at is not null and created_at < ?", &recordCount, dateToQuery(date, -20))
+		if err != nil {
+			fmt.Errorf("ERROR: Error Querying database: %q", err)
+		}
+
+		deleteCount, err := countRecords.Rows()
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+		var count int
+		for deleteCount.Next() {
+			if err := deleteCount.Scan(&count); err != nil {
+				fmt.Errorf("%q", err)
+			}
+		}
+		log.Println(strconv.Itoa(count) + " records have been deleted")
+		refreshDatabase = true
+		log.Println("Database Refresh completed in: ", time.Since(start))
+	}
+}
+
+type Hospital struct {
+	Name              string
+	BlockName         string
+	Date              string
+	AvailableCapacity float64
+	MinAgeLimit       float64
+	Vaccine           string
+}
+
+type District struct {
+	DistrictName string
+	Hospital     []Hospital
+}
+
+func CacheRefreshTask() {
+	if refreshDatabase {
+		log.Println("Launching Cache Refresh Task")
+		start := time.Now()
+		db, err := database.CreateConnection("cowin_user", "GenieHello^123", "172.23.227.40", "cowin_database")
 		if err != nil {
 			log.Println(err)
 		}
 		defer db.Connection.Close()
-		db.Connection.AutoMigrate(&model.Hospitals{})
-		data := hdata.convertToInterfaces()
-		_, err = db.Load(data, 300)
+
+		results, err := db.DatabaseQueryWithoutCondition("select max(created_at) from hospitals")
 		if err != nil {
-			log.Println("ERROR: bulk load has failed: ", err)
-			return
+			fmt.Errorf("ERROR: Error Querying database: %q", err)
 		}
-		log.Println("Insert into the database has been completed")
-
-
-
-		deletiondate := dateToQuery(db.Connection, "hospital", -30)
-		log.Println("Hard Deleting all data before ", deletiondate)
-		var hospitals model.Hospitals
-		tx := db.Connection.Begin()
-		results := db.Connection.Where("created_at < ?", deletiondate).Delete(&hospitals)
-		tx.Commit()
-		if results.Error != nil {
-			log.Println("ERROR: ", results.Error)
-			return
+		var date string
+		createdAt, err := results.Rows()
+		if err != nil {
+			fmt.Errorf("%q", err)
 		}
-		log.Println("Deleted " + strconv.Itoa(int(results.RowsAffected)) + " Records.")
-		log.Println("Database Transaction completed in: ", time.Now().Sub(start))
-	}
-	refreshDatabase = true
-}
-
-type Result struct {
-	Name string
-	BlockName string
-	Date string
-	AvailableCapacity float64
-	MinAgeLimit float64
-	Vaccine string
-}
-
-type Results struct {
-	DistrictName string
-	Result Result
-}
-
-func UpdateCache(rh *rejson.Handler, finalResult []Results) {
-	res, err := rh.JSONSet("cowinResult", ".", finalResult)
-	if err != nil {
-		log.Fatalf("Failed to JSONSet")
-		return
-	}
-
-	if res.(string) == "OK" {
-		fmt.Printf("Success: %s\n", res)
-	} else {
-		fmt.Println("Failed to Set: ")
-	}
-}
-
-func CacheRefreshTask() {
-		if refreshDatabase {
-			log.Println("Launching Cache Refresh Task")
-			db, err := database.Connection("cowin", "HappyVaccination123*", "localhost", "cowin_database")
-			if err != nil {
-				log.Println(err)
+		for createdAt.Next() {
+			if err := createdAt.Scan(&date); err != nil {
+				fmt.Errorf("%q", err)
 			}
-			defer db.Connection.Close()
-			querydate := dateToQuery(db.Connection, "hospital", -10)
-			log.Println("Querying database for fetching data")
-			var finalResult []Results
-			tx := db.Connection.Begin()
-			records, _ := tx.Table("hospitals").Select("name, district_name, block_name, date, available_capacity, min_age_limit, vaccine").Where("created_at > ?", querydate).Rows()
-			for records.Next() {
-				var name, districtName, blockName, date, vaccine string
-				var availableCapacity, minAgeLimit float64
-				if err := records.Scan(&name, &districtName, &blockName, &date, &availableCapacity, &minAgeLimit, &vaccine); err != nil {
-					log.Println("ERROR: ", err)
-				}
-				var results Results
-				
-				results.DistrictName = districtName
-				results.Result.Name = name
-				results.Result.BlockName = blockName
-				results.Result.Date = date
-				results.Result.AvailableCapacity = availableCapacity
-				results.Result.MinAgeLimit = minAgeLimit
-				results.Result.Vaccine = vaccine
-				finalResult = append(finalResult, results)
-			}
-			tx.Commit()
-			log.Println("Fetching Records Completed")
-			log.Println("Setting Cache in Redis")
-			var addr = flag.String("Server", "localhost:6379", "Redis server address")
-			rh := rejson.NewReJSONHandler()
-			flag.Parse()
-			cli := goredis.NewClient(&goredis.Options{Addr: *addr})
-			rh.SetGoRedisClient(cli)
-			UpdateCache(rh, finalResult)
 		}
+
+		log.Println("Querying for last 5 minutes data, i.e: ", dateToQuery(date, -5))
+
+		data, err := db.DatabaseQueryWithCondition("select name, district_name, block_name, date, available_capacity, min_age_limit, vaccine from hospitals where deleted_at is null and created_at > ?", results, dateToQuery(date, -5))
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		records, err := data.Rows()
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		var city []District
+		for records.Next() {
+			var name, districtName, blockName, date, vaccine string
+			var availableCapacity, minAgeLimit float64
+			if err := records.Scan(&name, &districtName, &blockName, &date, &availableCapacity, &minAgeLimit, &vaccine); err != nil {
+				log.Println("ERROR: ", err)
+			}
+
+			var hospitalData Hospital
+			var district District
+			district.DistrictName = districtName
+			hospitalData.Name = name
+			hospitalData.BlockName = blockName
+			hospitalData.Date = date
+			hospitalData.AvailableCapacity = availableCapacity
+			hospitalData.MinAgeLimit = minAgeLimit
+			hospitalData.Vaccine = vaccine
+			district.Hospital = append(district.Hospital, hospitalData)
+			city = append(city, district)
+		}
+
+		log.Println("Fetching Records Completed")
+		log.Println("Setting Cache in Redis")
+		redisClient, err := cache.CreateConnection("localhost", "", 6379)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		rh, err := cache.NewReJSONHandler(redisClient)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		var interfaceData []interface{}
+		for _, value := range city {
+			interfaceData = append(interfaceData, value)
+		}
+		_, err = rh.Set("cowin", ".", interfaceData)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+		log.Println("Cache Refresh Task Completed in: ", time.Since(start))
+	}
 }

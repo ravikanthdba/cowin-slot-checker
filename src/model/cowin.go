@@ -116,10 +116,10 @@ type States struct {
 	StateName string
 }
 
-func (c *CowinClient) GetStates(request *http.Request) []States {
+func (c *CowinClient) GetStates(request *http.Request) ([]States, error) {
 	response, err := queryCowinForStates(c, request)
 	if err != nil {
-		log.Println("Error: ", err)
+		return nil, fmt.Errorf("Error: ", err)
 	}
 
 	var states []States
@@ -130,7 +130,7 @@ func (c *CowinClient) GetStates(request *http.Request) []States {
 		states = append(states, s)
 	}
 
-	return states
+	return states, nil
 }
 
 type CowinDistrictsResponse struct {
@@ -139,12 +139,6 @@ type CowinDistrictsResponse struct {
 		DistrictID   int    `json:"district_id"`
 		DistrictName string `json:"district_name"`
 	} `json:"districts"`
-}
-
-type Districts struct {
-	StateID      int
-	DistrictID   int
-	DistrictName string
 }
 
 func queryCowinForDistricts(c *CowinClient, request *http.Request, stateID string) (*CowinDistrictsResponse, error) {
@@ -163,6 +157,11 @@ func queryCowinForDistricts(c *CowinClient, request *http.Request, stateID strin
 	return &cowindistrictresponse, nil
 }
 
+type Districts struct {
+	DistrictID   int
+	DistrictName string
+}
+
 func (c *CowinClient) GetDistricts(request *http.Request, stateID string) []Districts {
 	cowinResponse, err := queryCowinForDistricts(c, request, stateID)
 	var districts []Districts
@@ -171,7 +170,6 @@ func (c *CowinClient) GetDistricts(request *http.Request, stateID string) []Dist
 	}
 	for _, value := range cowinResponse.Districts {
 		var d Districts
-		d.StateID = value.StateID
 		d.DistrictID = value.DistrictID
 		d.DistrictName = strings.ToLower(value.DistrictName)
 		districts = append(districts, d)
@@ -182,14 +180,14 @@ func (c *CowinClient) GetDistricts(request *http.Request, stateID string) []Dist
 
 type CowinHospitalsResponse struct {
 	Centers []struct {
-		Name         string `json:"name"`
-		Address      string `json:"address"`
-		StateName    string `json:"state_name"`
-		DistrictName string `json:"district_name"`
-		BlockName    string `json:"block_name"`
-		Pincode      int    `json:"pincode"`
-		Lat          int    `json:"lat"`
-		Long         int    `json:"long"`
+		Name         string  `json:"name"`
+		Address      string  `json:"address"`
+		StateName    string  `json:"state_name"`
+		DistrictName string  `json:"district_name"`
+		BlockName    string  `json:"block_name"`
+		Pincode      int     `json:"pincode"`
+		Lat          float64 `json:"lat"`
+		Long         float64 `json:"long"`
 		Sessions     []struct {
 			Date              string  `json:"date"`
 			AvailableCapacity float64 `json:"available_capacity"`
@@ -222,8 +220,8 @@ type Hospitals struct {
 	DistrictName      string
 	BlockName         string
 	Pincode           int
-	Lat               int
-	Long              int
+	Lat               float64
+	Long              float64
 	Date              string
 	AvailableCapacity float64
 	MinAgeLimit       int
@@ -238,7 +236,7 @@ func (c *CowinClient) GetHospitals(request *http.Request, districtID, date strin
 	}
 
 	if len(cowinResponse.Centers) > 0 {
-	for _, value := range cowinResponse.Centers {
+		for _, value := range cowinResponse.Centers {
 			for _, session := range value.Sessions {
 				if int(session.AvailableCapacity) > 0 {
 					var h Hospitals
