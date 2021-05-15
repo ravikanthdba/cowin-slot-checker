@@ -1,12 +1,12 @@
 package scheduler
 
 import (
-	"strconv"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 
-	model "github.com/cowin-slot-checker/src/model"
+	model "github.com/cowin-slot-checker/cowin-slot-checker-worker/src/model"
 )
 
 const (

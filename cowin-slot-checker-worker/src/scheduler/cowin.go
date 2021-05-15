@@ -11,9 +11,9 @@ import (
 
 	"github.com/gammazero/workerpool"
 
-	cache "github.com/cowin-slot-checker/src/cache"
-	database "github.com/cowin-slot-checker/src/database"
-	model "github.com/cowin-slot-checker/src/model"
+	cache "github.com/cowin-slot-checker/cowin-slot-checker-worker/src/cache"
+	database "github.com/cowin-slot-checker/cowin-slot-checker-worker/src/database"
+	model "github.com/cowin-slot-checker/cowin-slot-checker-worker/src/model"
 )
 
 var refreshStatesTask bool

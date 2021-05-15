@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	scheduler "github.com/cowin-slot-checker/src/scheduler"
+	scheduler "github.com/cowin-slot-checker/cowin-slot-checker-worker/src/scheduler"
 	"github.com/robfig/cron"
 )
 
