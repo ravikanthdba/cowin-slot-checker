@@ -200,6 +200,7 @@ func DatabaseRefreshTask() {
 }
 
 type Hospital struct {
+	District          string
 	Name              string
 	BlockName         string
 	Date              string
@@ -261,6 +262,7 @@ func CacheRefreshTask() {
 			var hospitalData Hospital
 			var district District
 			district.DistrictName = districtName
+			hospitalData.District = districtName
 			hospitalData.Name = name
 			hospitalData.BlockName = blockName
 			hospitalData.Date = date
