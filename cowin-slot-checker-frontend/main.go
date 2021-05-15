@@ -22,9 +22,36 @@ type Hospital struct {
 	Vaccine           string
 }
 
-type District struct {
+type HospitalsData struct {
 	DistrictName string
 	Hospital     []Hospital
+}
+
+type Districts struct {
+	DistrictID   int
+	DistrictName string
+}
+
+func districtExists(handler *cache.RedisHandler, districtName string) (string, error) {
+	districts, err := redis.Bytes(handler.Get("districts", "."))
+	if err != nil {
+		return "", err
+	}
+
+	var districtsData [][]Districts
+	err = json.Unmarshal(districts, &districtsData)
+	if err != nil {
+		return "", err
+	}
+
+	for _, district := range districtsData {
+		for _, area := range district {
+			if strings.Contains(area.DistrictName, districtName) {
+				return area.DistrictName, nil
+			}
+		}
+	}
+	return "", fmt.Errorf(districtName + " not exists")
 }
 
 func main() {
@@ -33,7 +60,7 @@ func main() {
 		log.Panic(err)
 	}
 
-	bot.Debug = true
+	// bot.Debug = true
 
 	log.Printf("Authorized on account %s", bot.Self.FirstName)
 
@@ -43,11 +70,17 @@ func main() {
 	updates, _ := bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil { // ignore any non-Message Updates
+		if update.Message == nil {
 			continue
 		}
 
 		log.Printf("[%s]:  %s", update.Message.From, update.Message.Text)
+
+		if update.Message.Text == "/start" {
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Welcome to Cowin Telegram Chat Bot"+update.Message.Chat.FirstName+" "+update.Message.Chat.LastName+"\n Please enter the district name and press send")
+			msg.ReplyToMessageID = update.Message.MessageID
+			bot.Send(msg)
+		}
 
 		redisClient, err := cache.CreateConnection("localhost", "", 6379)
 		if err != nil {
@@ -59,53 +92,60 @@ func main() {
 			fmt.Errorf("%q", err)
 		}
 
-		records, err := redis.Bytes(rh.Get("cowin", "."))
+		district, err := districtExists(rh, strings.ToLower(update.Message.Text))
 		if err != nil {
-			fmt.Errorf("%q", err)
-		}
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, strings.ToUpper(update.Message.Text)+" is not a Valid District Name")
+			msg.ReplyToMessageID = update.Message.MessageID
+			bot.Send(msg)
+		} else {
+			records, err := redis.Bytes(rh.Get("cowin", "."))
+			if err != nil {
+				fmt.Errorf("%q", err)
+			}
 
-		var district []District
-		err = json.Unmarshal(records, &district)
-		if err != nil {
-			fmt.Println(err)
-		}
+			var resultData []HospitalsData
+			err = json.Unmarshal(records, &resultData)
+			if err != nil {
+				fmt.Println(err)
+			}
 
-		var finalData []string
+			var finalData []string
 
-		for _, value := range district {
-			if strings.Contains(strings.ToLower(value.DistrictName), strings.ToLower(update.Message.Text)) {
-				for _, hospital := range value.Hospital {
-					if hospital.Date == time.Now().Format("02-01-2006") || hospital.Date == time.Now().Add(1440*time.Minute).Format("02-01-2006") || hospital.Date == time.Now().Add(2880*time.Minute).Format("02-01-2006") {
-						data := fmt.Sprintf("   Hospital: %s\n   MinAgeLimit: %d\n   Date: %s\n   AvailableCapacity:%d\n   Vaccine: %s\n   District: %s\n\n\n", hospital.Name, int(hospital.MinAgeLimit), hospital.Date, int(hospital.AvailableCapacity), hospital.Vaccine, hospital.District)
-						if len(finalData) < 10 {
-							finalData = append(finalData, data)
+			for _, value := range resultData {
+				if strings.ToLower(value.DistrictName) == strings.ToLower(update.Message.Text) {
+					for _, hospital := range value.Hospital {
+						if hospital.Date == time.Now().Format("02-01-2006") || hospital.Date == time.Now().Add(1440*time.Minute).Format("02-01-2006") || hospital.Date == time.Now().Add(2880*time.Minute).Format("02-01-2006") {
+							data := fmt.Sprintf("   Hospital: %s\n   MinAgeLimit: %d\n   Date: %s\n   AvailableCapacity:%d\n   Vaccine: %s\n   District: %s\n\n\n", hospital.Name, int(hospital.MinAgeLimit), hospital.Date, int(hospital.AvailableCapacity), hospital.Vaccine, hospital.District)
+							if len(finalData) < 10 {
+								finalData = append(finalData, data)
+							}
 						}
 					}
 				}
 			}
-		}
 
-		fmt.Println("Number of hospitals where vaccine is available for the city: ", update.Message.Text, " is: ", len(finalData))
+			fmt.Println("Number of hospitals where vaccine is available for the city: ", update.Message.Text, " is: ", len(finalData))
 
-		if len(finalData) == 0 {
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "No slots available for the city: "+update.Message.Text+" for the next 2 days")
-			msg.ReplyToMessageID = update.Message.MessageID
-			bot.Send(msg)
-		}
-
-		for len(finalData) > 0 {
-			if len(finalData) <= 5 {
-				stringData := strings.Join(finalData, "\n")
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, stringData)
+			if len(finalData) == 0 {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Hi "+update.Message.Chat.FirstName+" "+update.Message.Chat.LastName+"\nNo slots available for the city: "+district+" for the next 2 days")
 				msg.ReplyToMessageID = update.Message.MessageID
 				bot.Send(msg)
-				finalData = finalData[len(finalData):]
-			} else {
-				stringData := strings.Join(finalData[:5], "\n")
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, stringData)
-				msg.ReplyToMessageID = update.Message.MessageID
-				bot.Send(msg)
-				finalData = finalData[5:]
+			}
+
+			for len(finalData) > 0 {
+				if len(finalData) <= 5 {
+					stringData := strings.Join(finalData, "\n")
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, stringData)
+					msg.ReplyToMessageID = update.Message.MessageID
+					bot.Send(msg)
+					finalData = finalData[len(finalData):]
+				} else {
+					stringData := strings.Join(finalData[:5], "\n")
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, stringData)
+					msg.ReplyToMessageID = update.Message.MessageID
+					bot.Send(msg)
+					finalData = finalData[5:]
+				}
 			}
 		}
 	}

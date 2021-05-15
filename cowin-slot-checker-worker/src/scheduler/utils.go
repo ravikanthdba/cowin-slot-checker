@@ -15,7 +15,7 @@ const (
 
 func getStateCodes(states []model.States) ([]string, error) {
 	if len(states) == 0 {
-		return nil, fmt.Errorf("No input passed into getStateCodes")
+		return nil, fmt.Errorf("%q", "No input passed into getStateCodes")
 	}
 
 	var stateCodes []string
@@ -23,6 +23,26 @@ func getStateCodes(states []model.States) ([]string, error) {
 		stateCodes = append(stateCodes, strconv.Itoa(value.StateID))
 	}
 	return stateCodes, nil
+}
+
+func (d DistrictsData) getDistrictCodes() ([]string, error) {
+	var districtCodes []string
+	for _, value := range d.Districts {
+		for _, code := range value {
+			districtCodes = append(districtCodes, strconv.Itoa(code.DistrictID))
+		}
+	}
+	return districtCodes, nil
+}
+
+func (d DistrictsData) getDistrictNames() ([]string, error) {
+	var districtNames []string
+	for _, value := range d.Districts {
+		for _, name := range value {
+			districtNames = append(districtNames, name.DistrictName)
+		}
+	}
+	return districtNames, nil
 }
 
 func getParsedURL(u string) (*url.URL, error) {

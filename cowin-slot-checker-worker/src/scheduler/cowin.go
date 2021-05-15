@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
 	"strconv"
 	"sync"
 	"time"
@@ -50,7 +51,12 @@ func RefreshStatesTask() {
 
 var mu sync.Mutex
 var refreshDistricts bool
-var districtcodes []string
+
+type DistrictsData struct {
+	Districts [][]model.Districts
+}
+
+var districtsData DistrictsData
 
 func RefreshDistrictsTask() {
 	if refreshStatesTask {
@@ -71,19 +77,43 @@ func RefreshDistrictsTask() {
 			if err != nil {
 				fmt.Errorf("ERROR: ", err)
 			}
+
 			wp.Submit(func() {
 				districts := client.GetDistricts(req, code)
-				for _, district := range districts {
-					mu.Lock()
-					districtcodes = append(districtcodes, strconv.Itoa(district.DistrictID))
-					mu.Unlock()
-				}
+				mu.Lock()
+				districtsData.Districts = append(districtsData.Districts, districts)
+				mu.Unlock()
 			})
 		}
 		wp.StopWait()
 		log.Println("Code completed in: ", time.Since(start))
 		refreshDistricts = true
 		log.Println("Refreshing Districts Data Completed")
+	}
+}
+
+func CachingDistrictsTask() {
+	if refreshDistricts {
+		start := time.Now()
+		redisClient, err := cache.CreateConnection("localhost", "", 6379)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		rh, err := cache.NewReJSONHandler(redisClient)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+
+		var interfaceData []interface{}
+		for _, value := range districtsData.Districts {
+			interfaceData = append(interfaceData, value)
+		}
+		_, err = rh.Set("districts", ".", interfaceData)
+		if err != nil {
+			fmt.Errorf("%q", err)
+		}
+		log.Println("Cache Refresh Task Completed in: ", time.Since(start))
 	}
 }
 
@@ -104,6 +134,11 @@ func RefreshHospitalsTask() {
 			log.Println(err)
 		}
 		wp := workerpool.New(5)
+		districtcodes, err := districtsData.getDistrictCodes()
+		if err != nil {
+			log.Println(err)
+		}
+
 		date := start.Format("02-01-2006")
 		for _, district := range districtcodes {
 			urlValue, err := getParsedURL("https://cdn-api.co-vin.in/api/v2/appointment/sessions/public/calendarByDistrict?date=" + date + "&" + "district_id=" + district)
