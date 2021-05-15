@@ -95,7 +95,7 @@ func RefreshDistrictsTask() {
 func CachingDistrictsTask() {
 	if refreshDistricts {
 		start := time.Now()
-		redisClient, err := cache.CreateConnection("localhost", "", 6379)
+		redisClient, err := cache.CreateConnection("20.198.121.66", "", 6379)
 		if err != nil {
 			fmt.Errorf("%q", err)
 		}
@@ -310,7 +310,7 @@ func CacheRefreshTask() {
 
 		log.Println("Fetching Records Completed")
 		log.Println("Setting Cache in Redis")
-		redisClient, err := cache.CreateConnection("localhost", "", 6379)
+		redisClient, err := cache.CreateConnection("20.198.121.66", "", 6379)
 		if err != nil {
 			fmt.Errorf("%q", err)
 		}
