@@ -58,7 +58,7 @@ func (d *DatabaseConnection) DatabaseQueryWithCondition(query string, model inte
 func (d *DatabaseConnection) DeleteRecords(query string, model interface{}, condition ...interface{}) (*gorm.DB, error) {
 	tx := d.Connection.Begin()
 	start := time.Now()
-	results := d.Connection.Where(query, condition...).Delete(model)
+	results := d.Connection.Unscoped().Where(query, condition...).Delete(model)
 	tx.Commit()
 	log.Println("Delete Query with condition for delete completed in: ", time.Since(start))
 	return results, nil

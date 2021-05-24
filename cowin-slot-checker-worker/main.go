@@ -9,7 +9,7 @@ import (
 	"github.com/robfig/cron"
 )
 
-func Hello(w http.ResponseWriter, r *http.Request) {
+func Status(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "GOOD")
 }
 
@@ -18,9 +18,11 @@ func main() {
 		log.Println("Launching Background Processes to Refresh data after application restarts")
 		scheduler.RefreshStatesTask()
 		scheduler.RefreshDistrictsTask()
-		scheduler.CachingDistrictsTask()
 		scheduler.RefreshHospitalsTask()
-		scheduler.DatabaseRefreshTask()
+		scheduler.HospitalsDatabaseRefreshTask()
+		scheduler.CapturePostalCodesTask()
+		scheduler.PostalCodeDatabaseRefreshTask()
+		// scheduler.CachingDistrictsTask()
 		scheduler.CacheRefreshTask()
 	}()
 
@@ -28,13 +30,13 @@ func main() {
 	log.Println("Scheduling the background jobs")
 	schedule.AddFunc("@every 720h", scheduler.RefreshStatesTask)
 	schedule.AddFunc("@every 360h", scheduler.RefreshDistrictsTask)
-	schedule.AddFunc("@every 365h", scheduler.CachingDistrictsTask)
 	schedule.AddFunc("@every 20m", scheduler.RefreshHospitalsTask)
-	schedule.AddFunc("@every 30m", scheduler.DatabaseRefreshTask)
+	schedule.AddFunc("@every 30m", scheduler.CapturePostalCodesTask)
+	schedule.AddFunc("@every 40m", scheduler.PostalCodeDatabaseRefreshTask)
 	schedule.AddFunc("@every 5m", scheduler.CacheRefreshTask)
 	log.Println("Scheduling Completed")
 	schedule.Start()
 
-	http.HandleFunc("/status", Hello)
+	http.HandleFunc("/status", Status)
 	http.ListenAndServe(":8080", nil)
 }
